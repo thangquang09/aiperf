@@ -61,6 +61,18 @@ AIPerf automatically collects metrics from Prometheus-compatible endpoints expos
 | `sglang:gen_throughput` | gauge | Real-time tokens/s (`stats.avg`) |
 | `sglang:queue_time_seconds` | histogram | Queue wait (`stats.p99_estimate`) |
 
+> [!IMPORTANT]
+> **SGLang server-side setup is required.** SGLang does not expose Prometheus exposition format at `/metrics` by default. Launch the server with `--enable-metrics`:
+>
+> ```bash
+> python -m sglang.launch_server \
+>   --model-path <model> \
+>   --enable-metrics \
+>   --host 0.0.0.0 --port 8000
+> ```
+>
+> Without this flag, `GET /metrics` returns 404 and AIPerf's auto-discovery silently falls back to no server-metrics collection (`server_metrics_export.*` files will not be produced).
+
 </Accordion>
 
 <Accordion title="TRT-LLM">
@@ -74,7 +86,7 @@ AIPerf automatically collects metrics from Prometheus-compatible endpoints expos
 | `trtllm:request_success` | counter | Completed requests (`stats.rate`) |
 
 > [!IMPORTANT]
-> **TRT-LLM server-side setup is required.** Unlike vLLM and SGLang, `trtllm-serve` does not expose Prometheus exposition format at `/metrics` by default — the default `/metrics` returns an iteration-stats JSON array (`application/json`), which is not parseable as Prometheus. Two consequences:
+> **TRT-LLM server-side setup is required.** Unlike vLLM, `trtllm-serve` does not expose Prometheus exposition format at `/metrics` by default — the default `/metrics` returns an iteration-stats JSON array (`application/json`), which is not parseable as Prometheus. Two consequences:
 >
 > 1. **Enable Prometheus on the server.** Pass `return_perf_metrics: true` in your `extra_llm_api_options.yaml`. This mounts the proper Prometheus exposition at `/prometheus/metrics` (a non-standard path).
 > 2. **AIPerf auto-detects and falls back.** When AIPerf hits `/metrics` and gets `application/json`, it automatically probes `<base>/prometheus/metrics` once. If the alt path serves Prometheus, AIPerf swaps the URL and continues — no manual override needed. If the alt path also fails (e.g. `return_perf_metrics` was not set), the collector auto-disables for the remainder of the run with a single warning.
