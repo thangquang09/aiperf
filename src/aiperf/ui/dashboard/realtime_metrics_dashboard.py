@@ -90,6 +90,8 @@ class RealtimeMetricsTable(Widget):
         if not self._columns_initialized:
             self._initialize_columns()
 
+        # ponytail: unregistered sweep metrics have no dashboard metadata.
+        metrics = [m for m in metrics if MetricRegistry.get_class_or_none(m.tag)]
         metrics = [
             metric
             for metric in sorted(

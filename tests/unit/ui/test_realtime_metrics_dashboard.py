@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -20,6 +20,25 @@ from aiperf.ui.dashboard.realtime_metrics_dashboard import RealtimeMetricsTable
 
 
 class TestRealtimeMetricsTable:
+    def test_update_skips_unregistered_metrics(self):
+        table = RealtimeMetricsTable(ServiceConfig())
+        table.data_table = MagicMock()
+        table.data_table.is_mounted = True
+        table._columns_initialized = True
+
+        table.update(
+            [
+                MetricResult(
+                    tag="effective_concurrency",
+                    header="Effective Concurrency",
+                    unit="requests",
+                    avg=1.0,
+                )
+            ]
+        )
+
+        table.data_table.add_row.assert_not_called()
+
     @pytest.mark.parametrize(
         "metric_tag, show_internal, should_skip",
         [
