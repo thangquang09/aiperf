@@ -149,6 +149,22 @@ class TestFixedScheduleSetup:
         timestamps = [ts for ts, _ in strategy._absolute_schedule]
         assert timestamps == sorted(timestamps)
 
+    async def test_schedules_only_root_conversations(self) -> None:
+        strategy, _, _ = make_strategy([(0, "root")])
+        strategy._conversation_source.dataset_metadata.conversations.append(
+            ConversationMetadata(
+                conversation_id="child",
+                turns=[TurnMetadata(timestamp_ms=1)],
+                is_root=False,
+            )
+        )
+
+        await strategy.setup_phase()
+
+        assert [
+            entry.turn.conversation_id for entry in strategy._absolute_schedule
+        ] == ["root"]
+
 
 @pytest.mark.asyncio
 class TestFixedScheduleExecutePhase:
