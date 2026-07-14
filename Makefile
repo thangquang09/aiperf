@@ -16,7 +16,7 @@
 
 
 .PHONY: ruff lint ruff-fix lint-fix format fmt check-format check-fmt \
-		test coverage clean install install-app docker docker-run first-time-setup \
+		test coverage clean install install-app docker docker-run docker-push first-time-setup \
 		test-verbose setup-venv install-mock-server test-ci test-all \
 		integration-tests integration-tests-ci integration-tests-verbose integration-tests-ci-macos \
 		test-integration test-integration-ci test-integration-verbose test-integration-ci-macos \
@@ -55,6 +55,12 @@ UV_PATH ?= $(HOME)/.local/bin
 DOCKER_IMAGE_NAME ?= $(APP_NAME)
 # The tag of the docker image (defaults to the app version)
 DOCKER_IMAGE_TAG ?= $(APP_VERSION)
+
+# Public prebuilt image the InferenceX remote agentic-replay runners pull.
+# Moving tag: rebuild+push overwrites it, runners get the new build on next pull.
+PUBLIC_IMAGE ?= docker.io/thangquang09/aiperf:weka
+# benchmark-client runners are linux/amd64; build for that even from an arm64 host.
+PUBLIC_PLATFORM ?= linux/amd64
 
 # The extra arguments the user passed to make
 args = $(filter-out $@,$(MAKECMDGOALS))
@@ -154,6 +160,9 @@ docker: #? build the docker image.
 
 docker-run: #? run the docker container.
 	docker run -it --rm $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG) $(args)
+
+docker-push: #? build + push the public linux/amd64 image for InferenceX runners.
+	docker buildx build --platform $(PUBLIC_PLATFORM) --target runtime -t $(PUBLIC_IMAGE) --push .
 
 version: #? print the version of the project.
 	@PATH="$(UV_PATH):$(PATH)" uv version

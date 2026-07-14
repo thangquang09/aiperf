@@ -96,6 +96,7 @@ RUN mkdir -p /opt/licenses/dpkg \
     && apt-get update -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential \
+        git \
         libogg-dev \
         libvorbis-dev \
         libvpx-dev \
