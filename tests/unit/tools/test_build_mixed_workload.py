@@ -9,7 +9,7 @@ import pytest
 from aiperf.common.enums import ConversationBranchMode, PrerequisiteKind
 from aiperf.common.models import Conversation
 from aiperf.common.models.branch import ConversationBranchInfo
-from aiperf.common.models.dataset_models import Turn
+from aiperf.common.models.dataset_models import Text, Turn
 from aiperf.common.models.prerequisites import TurnPrerequisite
 from aiperf.common.tokenizer import Tokenizer
 from aiperf.dataset.loader.dag_jsonl import DagJsonlLoader
@@ -138,6 +138,22 @@ def test_serialize_demotes_system_on_non_root_turn() -> None:
     d = conversation_to_dag_dict(conv, sid_prefix="weka", is_root=False)
     DagConversation.model_validate(d)
     assert d["turns"][0]["messages"][0]["role"] == "user"
+
+
+def test_serialize_falls_back_to_texts_when_no_raw_messages() -> None:
+    conv = Conversation(
+        session_id="sharegpt-0001",
+        turns=[
+            Turn(
+                texts=[Text(contents=["Hello, who are you?"])],
+                max_tokens=32,
+            )
+        ],
+    )
+    d = conversation_to_dag_dict(conv, sid_prefix="sharegpt", is_root=True)
+    DagConversation.model_validate(d)
+    assert d["turns"][0]["messages"] == [{"role": "user", "content": "Hello, who are you?"}]
+    assert d["turns"][0]["max_tokens"] == 32
 
 
 class _FakeComposer:

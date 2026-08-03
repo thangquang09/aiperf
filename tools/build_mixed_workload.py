@@ -87,7 +87,11 @@ def conversation_to_dag_dict(
     branch_by_id = {b.branch_id: b for b in conv.branches}
     turns_out: list[dict[str, Any]] = []
     for idx, turn in enumerate(conv.turns):
-        messages: list[dict[str, Any]] = list(turn.raw_messages or [])
+        raw: list[dict[str, Any]] = list(turn.raw_messages) if turn.raw_messages else []
+        if not raw and turn.texts:
+            joined = "\n".join(c for t in turn.texts for c in t.contents if c)
+            raw = [{"role": "user", "content": joined}] if joined else []
+        messages = raw
         if not is_root:
             messages = [
                 {**m, "role": "user"}
