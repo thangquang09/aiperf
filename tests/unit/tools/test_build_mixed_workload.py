@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from tools.build_mixed_workload import MixConfig, parse_config
+from aiperf.common.enums import ConversationBranchMode, PrerequisiteKind
+from aiperf.common.models import Conversation
+from aiperf.common.models.branch import ConversationBranchInfo
+from aiperf.common.models.dataset_models import Turn
+from aiperf.common.models.prerequisites import TurnPrerequisite
+from aiperf.dataset.loader.dag_jsonl_models import DagConversation
+from tools.build_mixed_workload import conversation_to_dag_dict, MixConfig, parse_config
 
 
 def test_parse_config_valid(tmp_path: Path) -> None:
@@ -52,3 +58,73 @@ tokenizer: builtin
     )
     with pytest.raises(ValueError, match=r"weights.*100"):
         parse_config(cfg_file)
+
+
+def _single_turn_conv(
+    sid: str, content: str, max_tokens: int = 64, delay: float = 0.0
+) -> Conversation:
+    return Conversation(
+        session_id=sid,
+        turns=[
+            Turn(
+                raw_messages=[{"role": "user", "content": content}],
+                max_tokens=max_tokens,
+                delay=delay,
+            )
+        ],
+    )
+
+
+def test_serialize_single_turn_sharegpt_shape() -> None:
+    conv = _single_turn_conv(
+        "sharegpt-0001", "Hello, who are you?", max_tokens=32, delay=1500
+    )
+    d = conversation_to_dag_dict(conv, sid_prefix="sharegpt", is_root=True)
+    DagConversation.model_validate(d)
+    assert d["session_id"] == "sharegpt-sharegpt-0001"
+    assert d["turns"][0]["messages"] == [{"role": "user", "content": "Hello, who are you?"}]
+    assert d["turns"][0]["max_tokens"] == 32
+    assert d["turns"][0]["delay"] == 1500
+
+
+def test_serialize_spawn_with_join_at() -> None:
+    conv = Conversation(
+        session_id="root",
+        turns=[
+            Turn(
+                raw_messages=[{"role": "user", "content": "plan"}],
+                branch_ids=["root:0"],
+            ),
+            Turn(
+                raw_messages=[{"role": "user", "content": "after"}],
+                prerequisites=[
+                    TurnPrerequisite(kind=PrerequisiteKind.SPAWN_JOIN, branch_id="root:0")
+                ],
+            ),
+        ],
+        branches=[
+            ConversationBranchInfo(
+                branch_id="root:0",
+                child_conversation_ids=["subagent_a"],
+                mode=ConversationBranchMode.SPAWN,
+                is_background=False,
+            )
+        ],
+    )
+    d = conversation_to_dag_dict(conv, sid_prefix="weka", is_root=True)
+    DagConversation.model_validate(d)
+    assert d["turns"][0]["spawns"] == [{"children": ["weka-subagent_a"], "join_at": 1}]
+
+
+def test_serialize_demotes_system_on_non_root_turn() -> None:
+    conv = Conversation(
+        session_id="forkchild",
+        turns=[
+            Turn(
+                raw_messages=[{"role": "system", "content": "you are X"}],
+            ),
+        ],
+    )
+    d = conversation_to_dag_dict(conv, sid_prefix="weka", is_root=False)
+    DagConversation.model_validate(d)
+    assert d["turns"][0]["messages"][0]["role"] == "user"

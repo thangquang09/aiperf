@@ -18,6 +18,9 @@ if __name__ == "__main__" and "tools" not in sys.modules:
 
 from ruamel.yaml import YAML
 
+from aiperf.common.enums import ConversationBranchMode, PrerequisiteKind
+from aiperf.common.models import Conversation
+
 
 @dataclass(slots=True)
 class SourceConfig:
@@ -60,3 +63,67 @@ def parse_config(path: Path) -> MixConfig:
         out_file=Path(data["out_file"]),
         tokenizer=data.get("tokenizer", "builtin"),
     )
+
+
+def conversation_to_dag_dict(
+    conv: Conversation, sid_prefix: str, is_root: bool
+) -> dict[str, Any]:
+    """Serialize a Conversation to a dag_jsonl line dict.
+
+    Branches on the conversation are mapped to per-turn forks/spawns by
+    matching branch_id against each turn's branch_ids. SPAWN_JOIN prereqs
+    on a later turn define join_at for object-form spawns.
+    """
+    branch_by_id = {b.branch_id: b for b in conv.branches}
+    turns_out: list[dict[str, Any]] = []
+    for idx, turn in enumerate(conv.turns):
+        messages: list[dict[str, Any]] = list(turn.raw_messages or [])
+        if not is_root:
+            messages = [
+                {**m, "role": "user"}
+                if isinstance(m, dict) and m.get("role") == "system"
+                else m
+                for m in messages
+            ]
+        out_turn: dict[str, Any] = {"messages": messages}
+        if turn.max_tokens is not None:
+            out_turn["max_tokens"] = turn.max_tokens
+        if turn.delay is not None:
+            out_turn["delay"] = turn.delay
+        forks: list[str] = []
+        spawns: list[Any] = []
+        for bid in turn.branch_ids:
+            branch = branch_by_id.get(bid)
+            if branch is None:
+                continue
+            children = [f"{sid_prefix}-{c}" for c in branch.child_conversation_ids]
+            if branch.mode == ConversationBranchMode.FORK:
+                forks.extend(children)
+            elif branch.mode == ConversationBranchMode.SPAWN:
+                join_at = _find_join_at(conv, bid, idx)
+                if join_at is not None:
+                    spawns.append({"children": children, "join_at": join_at})
+                else:
+                    spawns.extend(children)
+        if forks:
+            out_turn["forks"] = forks
+        if spawns:
+            out_turn["spawns"] = spawns
+        turns_out.append(out_turn)
+    return {
+        "session_id": f"{sid_prefix}-{conv.session_id}",
+        "turns": turns_out,
+    }
+
+
+def _find_join_at(
+    conv: Conversation, branch_id: str, after_idx: int
+) -> int | None:
+    """Return the turn index carrying a SPAWN_JOIN prereq for branch_id, else None."""
+    for k, turn in enumerate(conv.turns):
+        if k <= after_idx:
+            continue
+        for pre in turn.prerequisites:
+            if pre.kind == PrerequisiteKind.SPAWN_JOIN and pre.branch_id == branch_id:
+                return k
+    return None
