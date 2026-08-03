@@ -8,6 +8,8 @@ Usage:
 """
 from __future__ import annotations
 
+import argparse
+import asyncio
 import orjson
 import random
 import sys
@@ -205,3 +207,59 @@ def write_and_validate(lines: list[dict[str, Any]], out_path: Path) -> None:
     except Exception:
         out_path.unlink(missing_ok=True)
         raise
+
+
+def _slice_count(weight: int, total: int) -> int:
+    return max(1, round(total * weight / 100))
+
+
+async def build_mixed_workload(
+    cfg: MixConfig,
+    tokenizer: Tokenizer,
+    model_names: list[str],
+    *,
+    source_loader=load_source,
+) -> Path:
+    """Load all sources, serialize, and write the merged dag_jsonl file."""
+    all_conversations: list[tuple[Conversation, str]] = []
+    for name, src in cfg.sources.items():
+        convs = await source_loader(src, tokenizer, model_names)
+        sliced = convs[: _slice_count(src.weight, cfg.total_conversations)]
+        all_conversations.extend((c, name) for c in sliced)
+    referenced: set[str] = set()
+    for c, _ in all_conversations:
+        for b in c.branches:
+            referenced.update(b.child_conversation_ids)
+    lines: list[dict[str, Any]] = []
+    for conv, name in all_conversations:
+        is_root = conv.session_id not in referenced
+        lines.append(conversation_to_dag_dict(conv, sid_prefix=name, is_root=is_root))
+    write_and_validate(lines, cfg.out_file)
+    return cfg.out_file
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build a mixed-workload dag_jsonl file.")
+    parser.add_argument("--config", required=True, help="Path to config YAML")
+    parser.add_argument("--model", default="mock-model", help="Model name(s)")
+    parser.add_argument("--total-conversations", type=int, default=None)
+    parser.add_argument("--out-file", default=None)
+    parser.add_argument("--weka-num-traces", type=int, default=None)
+    args = parser.parse_args()
+
+    cfg = parse_config(Path(args.config))
+    if args.total_conversations is not None:
+        cfg.total_conversations = args.total_conversations
+    if args.out_file is not None:
+        cfg.out_file = Path(args.out_file)
+    if args.weka_num_traces is not None:
+        cfg.sources["agentic"].num_traces = args.weka_num_traces
+
+    tokenizer = Tokenizer.from_pretrained(cfg.tokenizer)
+    model_names = [m.strip() for m in args.model.split(",")]
+    out = asyncio.run(build_mixed_workload(cfg, tokenizer, model_names))
+    print(f"Wrote {out}")
+
+
+if __name__ == "__main__":
+    main()

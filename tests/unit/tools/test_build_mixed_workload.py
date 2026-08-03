@@ -15,6 +15,7 @@ from aiperf.common.tokenizer import Tokenizer
 from aiperf.dataset.loader.dag_jsonl import DagJsonlLoader
 from aiperf.dataset.loader.dag_jsonl_models import DagConversation
 from tools.build_mixed_workload import (
+    build_mixed_workload,
     conversation_to_dag_dict,
     load_source,
     MixConfig,
@@ -197,3 +198,34 @@ def test_write_and_validate_rejects_bad_file(tmp_path: Path) -> None:
     with pytest.raises(Exception):
         write_and_validate([{"session_id": "x", "turns": []}], out)
     assert not out.exists()
+
+
+async def _fake_source_loader(src, tokenizer, model_names, **kw):
+    counts = {
+        "sharegpt": 9,
+        "speed_bench_rag": 9,
+        "semianalysis_cc_traces_weka_062126_256k": 4,
+    }
+    n = counts[src.loader]
+    return [_single_turn_conv(f"{src.loader}-{i}", f"p{i}") for i in range(n)]
+
+
+def test_build_mixed_workload_end_to_end(tmp_path: Path) -> None:
+    tok = Tokenizer.from_pretrained("builtin")
+    cfg = MixConfig(
+        sources={
+            "chat": SourceConfig(loader="sharegpt", weight=30),
+            "rag": SourceConfig(loader="speed_bench_rag", weight=30),
+            "agentic": SourceConfig(
+                loader="semianalysis_cc_traces_weka_062126_256k", weight=40, num_traces=2
+            ),
+        },
+        total_conversations=30,
+        out_file=tmp_path / "merged.dag.jsonl",
+        tokenizer="builtin",
+    )
+    out = _asyncio_run(
+        build_mixed_workload(cfg, tok, ["mock-model"], source_loader=_fake_source_loader)
+    )
+    loaded = DagJsonlLoader(out).load()
+    assert len(loaded) >= 22  # 9+9+4

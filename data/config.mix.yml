@@ -1,0 +1,16 @@
+sources:
+  chat:
+    loader: sharegpt
+    weight: 30
+    chat_delay_ms: [500, 3000]
+  rag:
+    loader: speed_bench_rag
+    weight: 30
+    chat_delay_ms: [500, 3000]
+  agentic:
+    loader: semianalysis_cc_traces_weka_062126_256k
+    weight: 40
+    num_traces: 2
+total_conversations: 30
+out_file: data/merged_workload.dag.jsonl
+tokenizer: builtin
