@@ -94,6 +94,7 @@ dev = [
 [dependency-groups]
 dev = [
     "hypothesis>=6.152.4",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [tool.ruff]
