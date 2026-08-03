@@ -8,6 +8,7 @@ Usage:
 """
 from __future__ import annotations
 
+import orjson
 import random
 import sys
 from dataclasses import dataclass
@@ -21,9 +22,12 @@ from ruamel.yaml import YAML
 
 from aiperf.common.config.user_config import UserConfig
 from aiperf.common.enums import ConversationBranchMode, PrerequisiteKind
-from aiperf.common.models import Conversation
+from aiperf.common.models import Conversation, DatasetMetadata
 from aiperf.common.tokenizer import Tokenizer
+from aiperf.common.validators.orchestrator_v1 import validate_for_orchestrator_v1
 from aiperf.dataset.composer.public import PublicDatasetComposer
+from aiperf.dataset.loader.dag_jsonl import DagJsonlLoader
+from aiperf.plugin.enums import DatasetSamplingStrategy
 
 
 @dataclass(slots=True)
@@ -178,3 +182,26 @@ async def load_source(
             for turn in conv.turns:
                 turn.delay = random.randint(lo, hi)
     return conversations
+
+
+def write_and_validate(lines: list[dict[str, Any]], out_path: Path) -> None:
+    """Write JSONL, then re-validate with DagJsonlLoader as a format barrier.
+
+    On validation failure the partial file is deleted and an exception raised.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "wb") as f:
+        for line in lines:
+            f.write(orjson.dumps(line))
+            f.write(b"\n")
+    try:
+        conversations = DagJsonlLoader(out_path).load()
+        validate_for_orchestrator_v1(
+            DatasetMetadata(
+                conversations=[c.to_metadata() for c in conversations],
+                sampling_strategy=DatasetSamplingStrategy.RANDOM,
+            )
+        )
+    except Exception:
+        out_path.unlink(missing_ok=True)
+        raise

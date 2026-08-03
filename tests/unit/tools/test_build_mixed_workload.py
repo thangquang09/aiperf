@@ -12,6 +12,7 @@ from aiperf.common.models.branch import ConversationBranchInfo
 from aiperf.common.models.dataset_models import Turn
 from aiperf.common.models.prerequisites import TurnPrerequisite
 from aiperf.common.tokenizer import Tokenizer
+from aiperf.dataset.loader.dag_jsonl import DagJsonlLoader
 from aiperf.dataset.loader.dag_jsonl_models import DagConversation
 from tools.build_mixed_workload import (
     conversation_to_dag_dict,
@@ -19,6 +20,7 @@ from tools.build_mixed_workload import (
     MixConfig,
     parse_config,
     SourceConfig,
+    write_and_validate,
 )
 
 
@@ -163,3 +165,35 @@ def test_load_source_uses_injected_composer() -> None:
     )
     assert len(convs) == 3
     assert all(c.turns[0].delay >= 500 for c in convs)
+
+
+def test_write_and_validate_round_trips(tmp_path: Path) -> None:
+    lines = [
+        {
+            "session_id": "root",
+            "turns": [
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 16,
+                    "spawns": ["child"],
+                }
+            ],
+        },
+        {
+            "session_id": "child",
+            "turns": [
+                {"messages": [{"role": "user", "content": "sub"}], "max_tokens": 8}
+            ],
+        },
+    ]
+    out = tmp_path / "merged.dag.jsonl"
+    write_and_validate(lines, out)
+    loaded = DagJsonlLoader(out).load()
+    assert {c.session_id for c in loaded} == {"root", "child"}
+
+
+def test_write_and_validate_rejects_bad_file(tmp_path: Path) -> None:
+    out = tmp_path / "bad.dag.jsonl"
+    with pytest.raises(Exception):
+        write_and_validate([{"session_id": "x", "turns": []}], out)
+    assert not out.exists()
