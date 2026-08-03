@@ -11,8 +11,15 @@ from aiperf.common.models import Conversation
 from aiperf.common.models.branch import ConversationBranchInfo
 from aiperf.common.models.dataset_models import Turn
 from aiperf.common.models.prerequisites import TurnPrerequisite
+from aiperf.common.tokenizer import Tokenizer
 from aiperf.dataset.loader.dag_jsonl_models import DagConversation
-from tools.build_mixed_workload import conversation_to_dag_dict, MixConfig, parse_config
+from tools.build_mixed_workload import (
+    conversation_to_dag_dict,
+    load_source,
+    MixConfig,
+    parse_config,
+    SourceConfig,
+)
 
 
 def test_parse_config_valid(tmp_path: Path) -> None:
@@ -128,3 +135,31 @@ def test_serialize_demotes_system_on_non_root_turn() -> None:
     d = conversation_to_dag_dict(conv, sid_prefix="weka", is_root=False)
     DagConversation.model_validate(d)
     assert d["turns"][0]["messages"][0]["role"] == "user"
+
+
+class _FakeComposer:
+    def __init__(self, config, tokenizer, **kw):
+        self._config = config
+        self._tokenizer = tokenizer
+
+    async def create_dataset_async(self) -> list[Conversation]:
+        return [
+            _single_turn_conv("0001", "fake prompt", max_tokens=16)
+            for _ in range(3)
+        ]
+
+
+def _asyncio_run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def test_load_source_uses_injected_composer() -> None:
+    tok = Tokenizer.from_pretrained("builtin")
+    src = SourceConfig(loader="sharegpt", weight=30, chat_delay_ms=(500, 3000))
+    convs = _asyncio_run(
+        load_source(src, tok, ["mock-model"], composer_factory=_FakeComposer)
+    )
+    assert len(convs) == 3
+    assert all(c.turns[0].delay >= 500 for c in convs)

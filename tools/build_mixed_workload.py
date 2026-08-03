@@ -8,6 +8,7 @@ Usage:
 """
 from __future__ import annotations
 
+import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,8 +19,11 @@ if __name__ == "__main__" and "tools" not in sys.modules:
 
 from ruamel.yaml import YAML
 
+from aiperf.common.config.user_config import UserConfig
 from aiperf.common.enums import ConversationBranchMode, PrerequisiteKind
 from aiperf.common.models import Conversation
+from aiperf.common.tokenizer import Tokenizer
+from aiperf.dataset.composer.public import PublicDatasetComposer
 
 
 @dataclass(slots=True)
@@ -127,3 +131,50 @@ def _find_join_at(
             if pre.kind == PrerequisiteKind.SPAWN_JOIN and pre.branch_id == branch_id:
                 return k
     return None
+
+
+def build_user_config(
+    public_dataset: str,
+    num_dataset_entries: int | None,
+    model_names: list[str],
+) -> UserConfig:
+    """Build a minimal UserConfig sufficient for PublicDatasetComposer.
+
+    ``endpoint.type`` is ``chat`` (a registered EndpointType that tokenizes
+    input and produces tokens, so the tokenizer validators pass). The brief's
+    ``"openai"`` is not a registered EndpointType and is rejected by the enum.
+    ``endpoint.urls`` defaults to ``["localhost:8000"]`` so no URL is needed.
+    """
+    data: dict[str, Any] = {
+        "endpoint": {
+            "type": "chat",
+            "model_names": model_names,
+        },
+        "input": {
+            "public_dataset": public_dataset,
+        },
+        "tokenizer": {"name": "builtin"},
+    }
+    if num_dataset_entries is not None:
+        data["input"]["conversation"] = {"num_dataset_entries": num_dataset_entries}
+    return UserConfig(**data)
+
+
+async def load_source(
+    src: SourceConfig,
+    tokenizer: Tokenizer,
+    model_names: list[str],
+    *,
+    composer_factory: type = PublicDatasetComposer,
+) -> list[Conversation]:
+    """Load one source via PublicDatasetComposer, applying chat_delay if set."""
+    num_entries = src.num_traces if src.num_traces is not None else None
+    config = build_user_config(src.loader, num_entries, model_names)
+    composer = composer_factory(config=config, tokenizer=tokenizer)
+    conversations = await composer.create_dataset_async()
+    if src.chat_delay_ms is not None:
+        lo, hi = src.chat_delay_ms
+        for conv in conversations:
+            for turn in conv.turns:
+                turn.delay = random.randint(lo, hi)
+    return conversations
