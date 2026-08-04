@@ -122,11 +122,13 @@ class SystemController(SignalHandlerMixin, BaseService):
         else:
             self.scale_record_processors_with_workers = True
 
-        # In Kubernetes mode, workers are external pods that connect via TCP.
-        # We must wait for at least one worker to register before starting profiling.
-        # In Multi-Process mode, workers are spawned locally and register automatically.
-        if self.service_config.service_run_type == ServiceRunType.KUBERNETES:
-            self.required_services[ServiceType.WORKER] = 1
+        # We must wait for at least one worker to register before starting
+        # profiling, regardless of run type. In Kubernetes mode, workers are
+        # external pods that connect via TCP; in Multi-Process mode, workers are
+        # spawned locally but asynchronously, so they can register after the
+        # profiling phase begins. Waiting here avoids a startup race where the
+        # first credit is issued before any worker exists (see StickyCreditRouter).
+        self.required_services[ServiceType.WORKER] = 1
 
         self.proxy_manager: ProxyManager = ProxyManager(
             service_config=self.service_config
