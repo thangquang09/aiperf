@@ -1313,6 +1313,15 @@ public_dataset_loader:
       prompt/completion pair from each conversation as a single-turn request.
       Filters entries by sequence length and token counts.
 
+  sharegpt_multiturn:
+    class: aiperf.dataset.loader.sharegpt_multiturn:ShareGPTMultiTurnLoader
+    description: |
+      ShareGPT dataset preserving the full multi-turn conversation. Each
+      human/assistant message pair becomes one Turn, so the benchmark
+      replays growing context across turns (exercising prefix-cache and
+      prefill under realistic multi-turn chat pressure). Mean 7.5 turns
+      per session in the source corpus.
+
   aimo:
     class: aiperf.dataset.loader.hf_instruction_response:HFInstructionResponseDatasetLoader
     description: |
