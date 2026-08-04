@@ -1458,6 +1458,17 @@ public_dataset_loader:
       hf_subset: qualitative
       category: rag
 
+  longrag_nq:
+    class: aiperf.dataset.loader.longrag:LongRAGLoader
+    description: |
+      TIGER-Lab/LongRAG NaturalQuestions (100 prompts). Long-context RAG with
+      pre-concatenated retrieved Wikipedia passages (~20K input tokens per
+      prompt), exercising heavy prefill and KV-cache pressure.
+    metadata:
+      hf_dataset_name: TIGER-Lab/LongRAG
+      hf_split: subset_100
+      hf_subset: nq
+
   speed_bench_reasoning:
     class: aiperf.dataset.loader.speed_bench:SpeedBenchLoader
     description: |
