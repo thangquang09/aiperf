@@ -1,16 +1,25 @@
+# Multi-turn chat + RAG + agentic mix (token-weighted by source pool size).
+#
+# chat uses sharegpt_multiturn: preserves full conversation (mean 3.5 turns).
+# Full pool sizes (measured):
+#   sharegpt_multiturn: 86,740 sessions, 302,403 requests, 16.33M input tokens
+#   speed_bench_rag:        80 sessions,      80 requests,  39.8K input tokens
+#   weka (per trace):  ~1.2M input tokens, ~13 turns each (synthesized)
+#
+# Tune `num_traces` to scale weka. With num_traces=4, agentic is ~21% of
+# pool tokens but only 19/86K sessions => use --max-chat-sessions to cap
+# chat so agentic gets sampled in short benchmark runs.
+
+tokenizer: builtin
 sources:
   chat:
-    loader: sharegpt
-    weight: 30
+    loader: sharegpt_multiturn
     chat_delay_ms: [500, 3000]
+    max_sessions: 500
   rag:
     loader: speed_bench_rag
-    weight: 30
     chat_delay_ms: [500, 3000]
   agentic:
     loader: semianalysis_cc_traces_weka_062126_256k
-    weight: 40
-    num_traces: 2
-total_conversations: 30
+    num_traces: 4
 out_file: data/merged_workload.dag.jsonl
-tokenizer: builtin

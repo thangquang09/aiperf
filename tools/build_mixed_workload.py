@@ -35,17 +35,18 @@ from aiperf.plugin.enums import DatasetSamplingStrategy
 @dataclass(slots=True)
 class SourceConfig:
     loader: str
-    weight: int
+    weight: int | None = None
     chat_delay_ms: tuple[int, int] | None = None
     num_traces: int | None = None
+    max_sessions: int | None = None
 
 
 @dataclass(slots=True)
 class MixConfig:
     sources: dict[str, SourceConfig]
-    total_conversations: int
     out_file: Path
     tokenizer: str
+    total_conversations: int | None = None
 
 
 def parse_config(path: Path) -> MixConfig:
@@ -54,22 +55,32 @@ def parse_config(path: Path) -> MixConfig:
         data: dict[str, Any] = yaml.load(f)
     sources: dict[str, SourceConfig] = {}
     total_weight = 0
+    has_weight = False
     for name, src in data.get("sources", {}).items():
         delay = src.get("chat_delay_ms")
+        weight = src.get("weight")
+        if weight is not None:
+            has_weight = True
+            total_weight += weight
         sources[name] = SourceConfig(
             loader=src["loader"],
-            weight=src["weight"],
+            weight=weight,
             chat_delay_ms=tuple(delay) if delay else None,
             num_traces=src.get("num_traces"),
+            max_sessions=src.get("max_sessions"),
         )
-        total_weight += src["weight"]
-    if total_weight != 100:
+    total_conversations = data.get("total_conversations")
+    if has_weight and total_weight != 100:
         raise ValueError(
             f"Source weights must sum to 100, got {total_weight}"
         )
+    if has_weight and total_conversations is None:
+        raise ValueError(
+            "total_conversations is required when weight-based slicing is used"
+        )
     return MixConfig(
         sources=sources,
-        total_conversations=data["total_conversations"],
+        total_conversations=total_conversations,
         out_file=Path(data["out_file"]),
         tokenizer=data.get("tokenizer", "builtin"),
     )
@@ -91,6 +102,8 @@ def conversation_to_dag_dict(
         if not raw and turn.texts:
             joined = "\n".join(c for t in turn.texts for c in t.contents if c)
             raw = [{"role": "user", "content": joined}] if joined else []
+        if not raw:
+            raw = [{"role": "user", "content": " "}]
         messages = raw
         if not is_root:
             messages = [
@@ -217,6 +230,62 @@ def _slice_count(weight: int, total: int) -> int:
     return max(1, round(total * weight / 100))
 
 
+def _conv_input_tokens(conv: Conversation, tokenizer: Tokenizer) -> int:
+    """Estimate total input tokens (ISL) across all turns of a conversation."""
+    total = 0
+    for turn in conv.turns:
+        msgs = list(turn.raw_messages) if turn.raw_messages else []
+        if not msgs and turn.texts:
+            joined = "\n".join(
+                c for t in turn.texts for c in t.contents if c
+            )
+            msgs = [{"role": "user", "content": joined}] if joined else []
+        total += sum(
+            len(tokenizer.encode(m.get("content", "")))
+            for m in msgs
+            if isinstance(m, dict) and isinstance(m.get("content"), str)
+        )
+    return total
+
+
+def _report_distribution(
+    conversations: list[tuple[Conversation, str]],
+    tokenizer: Tokenizer,
+) -> None:
+    """Print per-source token/session/request distribution to stderr."""
+    import collections
+
+    stats: dict[str, dict[str, int]] = collections.defaultdict(
+        lambda: {"sessions": 0, "turns": 0, "tokens": 0}
+    )
+    for conv, name in conversations:
+        s = stats[name]
+        s["sessions"] += 1
+        s["turns"] += len(conv.turns)
+        s["tokens"] += _conv_input_tokens(conv, tokenizer)
+    grand = sum(s["tokens"] for s in stats.values())
+    print(
+        f"\n{'source':<12} {'sessions':>10} {'requests':>10} "
+        f"{'input_tokens':>16} {'token%':>7}",
+        file=sys.stderr,
+    )
+    print("-" * 57, file=sys.stderr)
+    for name, s in stats.items():
+        pct = f"{s['tokens'] * 100 / grand:.1f}%" if grand else "-"
+        print(
+            f"{name:<12} {s['sessions']:>10,} {s['turns']:>10,} "
+            f"{s['tokens']:>16,} {pct:>7}",
+            file=sys.stderr,
+        )
+    print("-" * 57, file=sys.stderr)
+    print(
+        f"{'total':<12} {sum(s['sessions'] for s in stats.values()):>10,} "
+        f"{sum(s['turns'] for s in stats.values()):>10,} "
+        f"{grand:>16,} {'100.0%':>7}",
+        file=sys.stderr,
+    )
+
+
 async def build_mixed_workload(
     cfg: MixConfig,
     tokenizer: Tokenizer,
@@ -224,12 +293,21 @@ async def build_mixed_workload(
     *,
     source_loader=load_source,
 ) -> Path:
-    """Load all sources, serialize, and write the merged dag_jsonl file."""
+    """Load all sources, serialize, and write the merged dag_jsonl file.
+
+    When ``total_conversations`` and per-source ``weight`` are set, sessions
+    are sliced by weight (legacy session-count mode). Otherwise each source
+    is loaded in full (or capped by ``num_traces`` / ``max_sessions``).
+    """
     all_conversations: list[tuple[Conversation, str]] = []
     for name, src in cfg.sources.items():
         convs = await source_loader(src, tokenizer, model_names)
-        sliced = convs[: _slice_count(src.weight, cfg.total_conversations)]
-        all_conversations.extend((c, name) for c in sliced)
+        if cfg.total_conversations is not None and src.weight is not None:
+            convs = convs[: _slice_count(src.weight, cfg.total_conversations)]
+        elif src.max_sessions is not None:
+            convs = convs[: src.max_sessions]
+        all_conversations.extend((c, name) for c in convs)
+    _report_distribution(all_conversations, tokenizer)
     referenced: set[str] = set()
     for c, _ in all_conversations:
         for b in c.branches:
@@ -249,6 +327,7 @@ def main() -> None:
     parser.add_argument("--total-conversations", type=int, default=None)
     parser.add_argument("--out-file", default=None)
     parser.add_argument("--weka-num-traces", type=int, default=None)
+    parser.add_argument("--max-chat-sessions", type=int, default=None)
     args = parser.parse_args()
 
     cfg = parse_config(Path(args.config))
@@ -257,7 +336,13 @@ def main() -> None:
     if args.out_file is not None:
         cfg.out_file = Path(args.out_file)
     if args.weka_num_traces is not None:
+        if "agentic" not in cfg.sources:
+            raise SystemExit("--weka-num-traces requires an 'agentic' source in config")
         cfg.sources["agentic"].num_traces = args.weka_num_traces
+    if args.max_chat_sessions is not None:
+        if "chat" not in cfg.sources:
+            raise SystemExit("--max-chat-sessions requires a 'chat' source in config")
+        cfg.sources["chat"].max_sessions = args.max_chat_sessions
 
     tokenizer = Tokenizer.from_pretrained(cfg.tokenizer)
     model_names = [m.strip() for m in args.model.split(",")]

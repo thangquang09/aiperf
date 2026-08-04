@@ -54,6 +54,27 @@ tokenizer: builtin
     assert cfg.sources["agentic"].num_traces == 2
 
 
+def test_parse_config_full_load_mode(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "config.yml"
+    cfg_file.write_text(
+        """
+sources:
+  chat:
+    loader: sharegpt
+    chat_delay_ms: [500, 3000]
+  agentic:
+    loader: semianalysis_cc_traces_weka_062126_256k
+    num_traces: 3
+out_file: out.jsonl
+tokenizer: builtin
+"""
+    )
+    cfg = parse_config(cfg_file)
+    assert cfg.total_conversations is None
+    assert cfg.sources["chat"].weight is None
+    assert cfg.sources["agentic"].num_traces == 3
+
+
 def test_parse_config_weights_must_sum_100(tmp_path: Path) -> None:
     cfg_file = tmp_path / "config.yml"
     cfg_file.write_text(
@@ -176,7 +197,7 @@ def _asyncio_run(coro):
 
 def test_load_source_uses_injected_composer() -> None:
     tok = Tokenizer.from_pretrained("builtin")
-    src = SourceConfig(loader="sharegpt", weight=30, chat_delay_ms=(500, 3000))
+    src = SourceConfig(loader="sharegpt", chat_delay_ms=(500, 3000))
     convs = _asyncio_run(
         load_source(src, tok, ["mock-model"], composer_factory=_FakeComposer)
     )
@@ -230,13 +251,12 @@ def test_build_mixed_workload_end_to_end(tmp_path: Path) -> None:
     tok = Tokenizer.from_pretrained("builtin")
     cfg = MixConfig(
         sources={
-            "chat": SourceConfig(loader="sharegpt", weight=30),
-            "rag": SourceConfig(loader="speed_bench_rag", weight=30),
+            "chat": SourceConfig(loader="sharegpt"),
+            "rag": SourceConfig(loader="speed_bench_rag"),
             "agentic": SourceConfig(
-                loader="semianalysis_cc_traces_weka_062126_256k", weight=40, num_traces=2
+                loader="semianalysis_cc_traces_weka_062126_256k", num_traces=2
             ),
         },
-        total_conversations=30,
         out_file=tmp_path / "merged.dag.jsonl",
         tokenizer="builtin",
     )
